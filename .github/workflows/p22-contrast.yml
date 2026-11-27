@@ -1,0 +1,52 @@
+name: P22 A contrast comparison
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/p22-contrast.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack model
+        run: |
+          mkdir -p project logs
+          cat payload.part00 payload.part01 payload.part02 > render_payload.zip
+          sha256sum -c payload.sha256
+          unzip -q render_payload.zip -d project
+          test -f project/21_build_render.py
+          python patches/fix_blender5_glare.py project/21_build_render.py
+          python patches/p22_contrast_candidate.py project/21_build_render.py
+      - name: Install Blender
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fL --retry 3 https://download.blender.org/release/Blender5.0/blender-5.0.1-linux-x64.tar.xz -o blender-5.0.1-linux-x64.tar.xz
+          curl -fL --retry 3 https://download.blender.org/release/Blender5.0/blender-5.0.1.sha256 -o checksums
+          grep -F blender-5.0.1-linux-x64.tar.xz checksums > blender.sha256
+          sha256sum -c blender.sha256
+          tar -xf blender-5.0.1-linux-x64.tar.xz
+          echo "$RUNNER_TEMP/blender-5.0.1-linux-x64" >> "$GITHUB_PATH"
+      - name: Render frame 150 with Cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          blender --version | tee logs/blender-version.txt
+          blender -b --python-exit-code 1 --python project/21_build_render.py -- --quality smoke --render smoke 2>&1 | tee logs/cycles.log
+          python -c "import json,pathlib; p=pathlib.Path('project/renders/smoke'); q=json.loads((p/'runtime_qa.json').read_text()); assert q['complete'] and q['engine']=='CYCLES'; assert [x['frame'] for x in q['rendered_frames']]==[150]; assert all((p/x['file']).stat().st_size>24 for x in q['rendered_frames']); print(q)"
+      - name: Save test image and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: P22-contrast-A
+          path: |
+            logs/
+            project/renders/
+            project/p22_changes.json
+          if-no-files-found: warn
+          retention-days: 7
