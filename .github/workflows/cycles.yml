@@ -1,65 +1,57 @@
 name: P21 Cycles physical rendering
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/cycles.yml']
   workflow_dispatch:
     inputs:
       mode:
-        description: 'smoke = one test frame; test = three keyframes; range = selected frames'
+        description: Render mode
         type: choice
         options: [smoke, test, range]
         default: smoke
       quality:
-        description: 'smoke mode forces 640x360; other modes use this setting'
+        description: Quality (smoke mode forces smoke quality)
         type: choice
         options: [draft, balanced, high]
         default: draft
       start:
-        description: 'Range first frame (0-299)'
+        description: First frame
         type: number
         default: 0
       end:
-        description: 'Range last frame (max 30 per run)'
+        description: Last frame (maximum 30 frames per run)
         type: number
         default: 29
 permissions:
   contents: read
 jobs:
   render:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'P21.3: one-time Cycles smoke test'
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.event_name == 'push' && 45 || 340 }}
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
-      - name: Reassemble and verify project
-        shell: bash
+      - name: Verify and unpack model
         run: |
-          set -euo pipefail
-          mkdir -p logs project
+          mkdir -p project logs
           cat payload.part00 payload.part01 payload.part02 > render_payload.zip
           sha256sum -c payload.sha256
           unzip -q render_payload.zip -d project
-      - name: Install Blender 5.0.1 from official release
-        shell: bash
+          test -f project/21_build_render.py
+          python patches/fix_blender5_glare.py project/21_build_render.py
+      - name: Install Blender
         run: |
-          set -euo pipefail
-          base=https://download.blender.org/release/Blender5.0
-          archive=blender-5.0.1-linux-x64.tar.xz
-          curl -fL --retry 3 "$base/$archive" -o "$RUNNER_TEMP/$archive"
-          curl -fL --retry 3 "$base/blender-5.0.1.sha256" -o "$RUNNER_TEMP/checksums"
           cd "$RUNNER_TEMP"
-          grep -F "$archive" checksums > blender.sha256
+          curl -fL --retry 3 https://download.blender.org/release/Blender5.0/blender-5.0.1-linux-x64.tar.xz -o blender-5.0.1-linux-x64.tar.xz
+          curl -fL --retry 3 https://download.blender.org/release/Blender5.0/blender-5.0.1.sha256 -o checksums
+          grep -F blender-5.0.1-linux-x64.tar.xz checksums > blender.sha256
           sha256sum -c blender.sha256
-          tar -xf "$archive"
+          tar -xf blender-5.0.1-linux-x64.tar.xz
           echo "$RUNNER_TEMP/blender-5.0.1-linux-x64" >> "$GITHUB_PATH"
-      - name: Run actual Cycles rendering
+      - name: Render with Cycles
         shell: bash
         env:
-          MODE: ${{ inputs.mode || 'smoke' }}
-          QUALITY: ${{ inputs.quality || 'draft' }}
-          START: ${{ inputs.start || '0' }}
-          END: ${{ inputs.end || '29' }}
+          MODE: ${{ inputs.mode }}
+          QUALITY: ${{ inputs.quality }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
         run: |
           set -euo pipefail
           if [[ "$MODE" == smoke ]]; then QUALITY=smoke; fi
@@ -81,9 +73,9 @@ jobs:
               with (p/i['file']).open('rb') as f:
                   h=f.read(24)
               assert h[:8]==b'\x89PNG\r\n\x1a\n' and list(struct.unpack('>II',h[16:24]))==qa['resolution']
-          print('Actual Cycles PNG output headers verified:',expected)
+          print('Verified frames:',expected)
           PY
-      - name: Upload render outputs and logs even on failure
+      - name: Save test image and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
