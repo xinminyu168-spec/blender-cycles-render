@@ -1,5 +1,8 @@
 name: P21 Cycles physical rendering
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/cycles.yml']
   workflow_dispatch:
     inputs:
       mode:
@@ -24,8 +27,9 @@ permissions:
   contents: read
 jobs:
   render:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'P21.3: one-time Cycles smoke test'
     runs-on: ubuntu-24.04
-    timeout-minutes: 340
+    timeout-minutes: ${{ github.event_name == 'push' && 45 || 340 }}
     steps:
       - uses: actions/checkout@v4
       - name: Reassemble and verify project
@@ -52,10 +56,10 @@ jobs:
       - name: Run actual Cycles rendering
         shell: bash
         env:
-          MODE: ${{ inputs.mode }}
-          QUALITY: ${{ inputs.quality }}
-          START: ${{ inputs.start }}
-          END: ${{ inputs.end }}
+          MODE: ${{ inputs.mode || 'smoke' }}
+          QUALITY: ${{ inputs.quality || 'draft' }}
+          START: ${{ inputs.start || '0' }}
+          END: ${{ inputs.end || '29' }}
         run: |
           set -euo pipefail
           if [[ "$MODE" == smoke ]]; then QUALITY=smoke; fi
