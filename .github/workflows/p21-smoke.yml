@@ -21,6 +21,7 @@ jobs:
           sha256sum -c payload.sha256
           unzip -q render_payload.zip -d project
           test -f project/21_build_render.py
+          python patches/fix_blender5_glare.py project/21_build_render.py
       - name: Install Blender
         run: |
           cd "$RUNNER_TEMP"
