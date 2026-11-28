@@ -1,0 +1,66 @@
+name: P23 4K high-quality validation
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/p23-4k.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack model
+        run: |
+          mkdir -p project logs
+          cat payload.part00 payload.part01 payload.part02 > render_payload.zip
+          sha256sum -c payload.sha256
+          unzip -q render_payload.zip -d project
+          test -f project/21_build_render.py
+          python patches/fix_blender5_glare.py project/21_build_render.py
+          python patches/p22_contrast_candidate.py project/21_build_render.py
+          python patches/p23_high_budget.py project/21_build_render.py
+      - name: Cache verified Blender release
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-5.0.1-linux-x64
+          key: blender-official-5.0.1-linux-x64-v1
+      - name: Install Blender
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          if [[ ! -x blender-5.0.1-linux-x64/blender ]]; then
+            archive=blender-5.0.1-linux-x64.tar.xz
+            base=https://download.blender.org/release/Blender5.0
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "$base/blender-5.0.1.sha256" -o checksums
+            grep -F "$archive" checksums > blender.sha256
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "$base/$archive" -o "$archive" || curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "https://ftp.halifax.rwth-aachen.de/blender/release/Blender5.0/$archive" -o "$archive"
+            sha256sum -c blender.sha256
+            tar -xf "$archive"
+          fi
+          ./blender-5.0.1-linux-x64/blender --version | tee "$GITHUB_WORKSPACE/logs/install.txt"
+          echo "$RUNNER_TEMP/blender-5.0.1-linux-x64" >> "$GITHUB_PATH"
+      - name: Render frame 150 with Cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          blender --version | tee logs/blender-version.txt
+          blender -b --python-exit-code 1 --python project/21_build_render.py -- --quality high --render smoke 2>&1 | tee logs/cycles.log
+          python -c "import json,pathlib; p=pathlib.Path('project/renders/high'); q=json.loads((p/'runtime_qa.json').read_text()); assert q['complete'] and q['engine']=='CYCLES' and q['resolution']==[3840,2160] and q['samples']==1024 and q['sampling_time_limit_seconds']==3600; assert [x['frame'] for x in q['rendered_frames']]==[150]; assert all((p/x['file']).stat().st_size>24 for x in q['rendered_frames']); print(q)"
+      - name: Save test image and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: P23-4K-frame150
+          path: |
+            logs/
+            project/renders/
+            project/p22_changes.json
+          if-no-files-found: warn
+          retention-days: 7
