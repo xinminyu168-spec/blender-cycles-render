@@ -79,6 +79,17 @@ jobs:
                   }
               }
           ''',1))
+          lock=Path("buildscript-gradle.lockfile")
+          lines=lock.read_text().splitlines()
+          stale={
+              "org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.4.10=classpath",
+              "org.jetbrains.kotlin.plugin.serialization:org.jetbrains.kotlin.plugin.serialization.gradle.plugin:2.4.10=classpath",
+          }
+          assert all(lines.count(entry)==1 for entry in stale), "Unexpected dependency lock state"
+          assert "org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.4.10=classpath" in lines
+          assert "org.jetbrains.kotlin:kotlin-serialization:2.4.10=classpath" in lines
+          lock.write_text("\n".join(line for line in lines if line not in stale)+"\n")
+          print("Removed only two obsolete plugin marker lock entries")
           PY
           for artifact in compose-compiler-gradle-plugin kotlin-serialization; do
             url="https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/$artifact/2.4.10/$artifact-2.4.10.pom"
