@@ -61,11 +61,34 @@ jobs:
           test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
           ls -ld "$ANDROID_HOME"/platforms/android-37*
           cargo install cargo-ndk --locked
+      - name: Resolve Kotlin plugins from published Maven modules
+        working-directory: upstream
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("settings.gradle.kts")
+          old=p.read_text()
+          anchor="pluginManagement {\n"
+          assert old.count(anchor)==1
+          p.write_text(old.replace(anchor, anchor+'''    resolutionStrategy {
+                  eachPlugin {
+                      when (requested.id.id) {
+                          "org.jetbrains.kotlin.plugin.compose" -> useModule("org.jetbrains.kotlin:compose-compiler-gradle-plugin:${requested.version}")
+                          "org.jetbrains.kotlin.plugin.serialization" -> useModule("org.jetbrains.kotlin:kotlin-serialization:${requested.version}")
+                      }
+                  }
+              }
+          ''',1))
+          PY
+          for artifact in compose-compiler-gradle-plugin kotlin-serialization; do
+            url="https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/$artifact/2.4.10/$artifact-2.4.10.pom"
+            curl --location --retry 2 --connect-timeout 15 --max-time 60 --silent --show-error --output /dev/null --write-out "$artifact HTTP %{http_code}\n" "$url" || true
+          done
       - name: Build debug APK (separate package)
         working-directory: upstream
         run: |
           chmod +x gradlew
-          ./gradlew :standalone:assembleDebug --no-daemon --stacktrace
+          ./gradlew :standalone:assembleDebug --no-daemon --stacktrace --info --refresh-dependencies
       - uses: actions/upload-artifact@v4
         with:
           name: blenderbridge-native-debug-apk
