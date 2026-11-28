@@ -1,0 +1,131 @@
+name: P24.2 frames 4-19 and MP4 preview
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/p24-next.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  segment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Validate segment
+        env:
+          QUALITY: draft
+          START: '4'
+          END: '19'
+        run: |
+          python - <<'PY'
+          import os
+          q=os.environ['QUALITY']
+          a,b=int(os.environ['START']),int(os.environ['END'])
+          assert q in ('draft','balanced','high')
+          assert 0<=a<=b<=299
+          assert b-a+1 <= {'draft':20,'balanced':4,'high':4}[q]
+          print(f'P24 {q}: {a}-{b}')
+          PY
+      - uses: actions/checkout@v4
+      - name: Verify and unpack model
+        run: |
+          mkdir -p project logs
+          cat payload.part00 payload.part01 payload.part02 > render_payload.zip
+          sha256sum -c payload.sha256
+          unzip -q render_payload.zip -d project
+          test -f project/21_build_render.py
+          python patches/fix_blender5_glare.py project/21_build_render.py
+          python patches/p22_contrast_candidate.py project/21_build_render.py
+      - name: Cache verified Blender release
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-5.0.1-linux-x64
+          key: blender-official-5.0.1-linux-x64-v1
+      - name: Install Blender
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          if [[ ! -x blender-5.0.1-linux-x64/blender ]]; then
+            archive=blender-5.0.1-linux-x64.tar.xz
+            base=https://download.blender.org/release/Blender5.0
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "$base/blender-5.0.1.sha256" -o checksums
+            grep -F "$archive" checksums > blender.sha256
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "$base/$archive" -o "$archive" || curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "https://ftp.halifax.rwth-aachen.de/blender/release/Blender5.0/$archive" -o "$archive"
+            sha256sum -c blender.sha256
+            tar -xf "$archive"
+          fi
+          ./blender-5.0.1-linux-x64/blender --version | tee "$GITHUB_WORKSPACE/logs/install.txt"
+          echo "$RUNNER_TEMP/blender-5.0.1-linux-x64" >> "$GITHUB_PATH"
+      - name: Render selected animation segment
+        shell: bash
+        env:
+          QUALITY: draft
+          START: '4'
+          END: '19'
+        run: |
+          set -euo pipefail
+          blender --version | tee logs/blender-version.txt
+          blender -b --python-exit-code 1 --python project/21_build_render.py -- --quality "$QUALITY" --render range --start "$START" --end "$END" 2>&1 | tee logs/cycles.log
+          python - "$QUALITY" "$START" "$END" <<'PY'
+          import json,pathlib,struct,sys
+          quality,a,b=sys.argv[1:]
+          p=pathlib.Path('project/renders')/quality
+          q=json.loads((p/'runtime_qa.json').read_text())
+          assert q['complete'] and q['engine']=='CYCLES' and q['quality']==quality
+          expected={'draft':([1280,720],64),'balanced':([1920,1080],256),'high':([3840,2160],1024)}
+          assert (q['resolution'],q['samples'])==expected[quality]
+          assert [x['frame'] for x in q['rendered_frames']]==list(range(int(a),int(b)+1))
+          for x in q['rendered_frames']:
+              f=p/x['file']
+              with f.open('rb') as stream: h=stream.read(29)
+              assert h[:8]==bytes.fromhex('89504e470d0a1a0a')
+              assert list(struct.unpack('>II',h[16:24]))==q['resolution']
+              assert h[24]==16 and h[25]==2
+          print('Verified',len(q['rendered_frames']),'16-bit RGB PNG frames')
+          PY
+      - name: Retrieve first four verified frames
+        uses: actions/download-artifact@v4
+        with:
+          name: P24-draft-0-3-46135575102
+          run-id: 46135575102
+          github-token: ${{ github.token }}
+          path: prior
+      - name: Encode and verify contiguous MP4 preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p preview
+          cp prior/project/renders/draft/frame_*.png project/renders/draft/
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('project/renders/draft')
+          assert sorted(f.name for f in p.glob('frame_*.png'))==[f'frame_{n:04d}.png' for n in range(20)]
+          PY
+          ffmpeg -hide_banner -loglevel error -y -framerate 30 -start_number 0 -i project/renders/draft/frame_%04d.png -frames:v 20 -c:v libx264 -pix_fmt yuv420p -crf 17 -movflags +faststart preview/P24_first20.mp4
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames,r_frame_rate,duration -of json preview/P24_first20.mp4 > preview/video_qa.json
+          python - <<'PY'
+          import json
+          q=json.load(open('preview/video_qa.json'))['streams'][0]
+          assert (q['width'],q['height'],int(q['nb_frames']),q['r_frame_rate'])==(1280,720,20,'30/1')
+          PY
+      - name: Save preview video
+        uses: actions/upload-artifact@v4
+        with:
+          name: P24-first20-preview
+          path: preview/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Save segment and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: P24-draft-4-19-${{ github.run_id }}
+          path: |
+            logs/
+            project/renders/
+            project/p22_changes.json
+          if-no-files-found: warn
+          retention-days: 30
