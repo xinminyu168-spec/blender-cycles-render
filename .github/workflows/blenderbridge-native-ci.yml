@@ -119,10 +119,26 @@ jobs:
                   data = r.read(1048577)
               assert len(data) <= 1048576
               digest = hashlib.sha256(data).hexdigest()
-              # Verify against the publisher repository's separate checksum.
-              with urlopen(url+".sha256", timeout=30) as r:
-                  expected = r.read(1024).decode("ascii").strip().split()[0].lower()
-              assert re.fullmatch("[0-9a-f]{64}",expected) and digest == expected, filename
+              # Older Maven metadata may not publish a SHA-256 sidecar.
+              # Only the three named metadata files use this bootstrap path.
+              # Never accept a checksum mismatch or modify an existing pin.
+              from urllib.error import HTTPError
+              verified_by = None
+              for algorithm, length in [("sha256", 64), ("sha512", 128), ("sha1", 40)]:
+                  try:
+                      with urlopen(url+"."+algorithm, timeout=30) as r:
+                          expected = r.read(1024).decode("ascii").strip().split()[0].lower()
+                  except HTTPError as e:
+                      if e.code != 404:
+                          raise
+                      print("Missing sidecar:", filename, algorithm)
+                      continue
+                  assert re.fullmatch("[0-9a-f]{"+str(length)+"}",expected), filename
+                  assert hashlib.new(algorithm,data).hexdigest()==expected, "Checksum mismatch: "+filename
+                  verified_by = algorithm
+                  break
+              assert verified_by is not None, "No publisher checksum for "+filename
+              print("Bootstrap metadata:",filename,"sidecar:",verified_by,"sha256:",digest)
               attrs = {"group":group,"name":name,"version":version}
               matches = [c for c in components if c.attrib == attrs]
               assert len(matches)<=1
@@ -131,7 +147,7 @@ jobs:
                   assert len(existing)==1
                   assert digest in [h.attrib.get("value") for h in existing[0] if h.tag=="{"+ns+"}sha256"], "Existing pin mismatch: "+filename
                   continue
-              block = '         <artifact name="'+filename+'">\n            <sha256 value="'+digest+'" origin="Maven Central SHA-256 metadata"/>\n         </artifact>\n'
+              block = '         <artifact name="'+filename+'">\n            <sha256 value="'+digest+'" origin="Maven Central metadata bootstrap"/>\n         </artifact>\n'
               tag = '      <component group="'+group+'" name="'+name+'" version="'+version+'">\n'
               if matches:
                   assert text.count(tag)==1
