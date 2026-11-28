@@ -40,8 +40,8 @@ jobs:
       - name: Generate and check contract
         working-directory: upstream/rust
         run: |
-          cargo run --locked -p contract --bin generate_contract
-          cargo run --locked -p contract --bin generate_contract -- --check
+          cargo run --locked -p contract --bin generate-contract
+          cargo run --locked -p contract --bin generate-contract -- --check
           cargo check --locked --workspace
       - uses: actions/setup-java@v4
         with:
