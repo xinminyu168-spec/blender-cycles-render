@@ -119,6 +119,12 @@ jobs:
                   data = r.read(1048577)
               assert len(data) <= 1048576
               digest = hashlib.sha256(data).hexdigest()
+              pinned = {
+                  "guava-parent-33.4.0-jre.pom": "3a499ed34a0d9ee0f1bcc39230021a1cd4e2f7dd0426ab6844f585465d41dcd7",
+                  "junit-bom-5.10.2.module": "de23b114b3e4119a8fe6eb17bed5a3852816698bace67071579d6d927ebb080a",
+                  "junit-bom-5.11.0-M2.module": "86477abcf490d6ca059aa9973cb108d22a506f49d1a5569bb32cc6cbf43c2cce",
+              }
+              assert digest == pinned[filename], "Previously observed metadata digest changed"
               # Older Maven metadata may not publish a SHA-256 sidecar.
               # Only the three named metadata files use this bootstrap path.
               # Never accept a checksum mismatch or modify an existing pin.
@@ -159,11 +165,64 @@ jobs:
           ET.fromstring(text)
           p.write_text(text)
           PY
+      - name: Verify and pin Linux AAPT2 from Google Maven
+        working-directory: upstream
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.request import urlopen
+          from urllib.error import HTTPError
+          import hashlib
+          import re
+          import xml.etree.ElementTree as ET
+          path=Path("gradle/verification-metadata.xml")
+          version="9.4.0-15978811"
+          filename="aapt2-"+version+"-linux.jar"
+          url="https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/"+version+"/"+filename
+          with urlopen(url, timeout=120) as r:
+              data=r.read(67108865)
+          assert len(data)<=67108864 and data[:4]==b"PK\x03\x04"
+          digest=hashlib.sha256(data).hexdigest()
+          verified=False
+          for algorithm,n in [("sha256",64),("sha512",128)]:
+              try:
+                  with urlopen(url+"."+algorithm,timeout=30) as r:
+                      expected=r.read(1024).decode("ascii").strip().split()[0].lower()
+              except HTTPError as e:
+                  if e.code!=404: raise
+                  print("Missing Google checksum:",algorithm)
+                  continue
+              assert re.fullmatch("[0-9a-f]{"+str(n)+"}",expected)
+              assert hashlib.new(algorithm,data).hexdigest()==expected,"AAPT2 checksum mismatch"
+              verified=True
+              break
+          print("AAPT2 Linux SHA-256:",digest)
+          assert verified,"Strong publisher checksum unavailable; manual review required"
+          text=path.read_text()
+          anchor='      <component group="com.android.tools.build" name="aapt2" version="'+version+'">\n'
+          assert text.count(anchor)==1
+          assert 'name="'+filename+'"' not in text
+          block='         <artifact name="'+filename+'">\n            <sha256 value="'+digest+'" origin="Google Maven bootstrap"/>\n         </artifact>\n'
+          text=text.replace(anchor,anchor+block,1)
+          ET.fromstring(text)
+          path.write_text(text)
+          PY
       - name: Build debug APK (separate package)
         working-directory: upstream
         run: |
           chmod +x gradlew
           ./gradlew :standalone:assembleDebug --no-daemon --stacktrace --info --refresh-dependencies
+      - name: Verify APK identity and signature
+        working-directory: upstream
+        run: |
+          shopt -s nullglob
+          apks=(standalone/build/outputs/apk/debug/*.apk)
+          test "${#apks[@]}" -gt 0
+          for apk in "${apks[@]}"; do
+            "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" | grep "^package: name='com.droidbridge.standalone.debug'"
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk"
+            sha256sum "$apk"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: blenderbridge-native-debug-apk
