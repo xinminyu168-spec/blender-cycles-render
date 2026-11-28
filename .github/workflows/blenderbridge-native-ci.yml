@@ -1,0 +1,59 @@
+name: BlenderBridge native CI
+on:
+  push:
+    branches: [blenderbridge-native-ci]
+    paths:
+      - 'blenderbridge-ci/**'
+      - '.github/workflows/blenderbridge-native-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pinned upstream
+        uses: actions/checkout@v4
+        with:
+          repository: zephyr7030/DroidBridge
+          ref: e070a70fa810bfbd7cf8eeba211aafe706844a53
+          path: upstream
+          persist-credentials: false
+      - name: Apply fixed-action patch
+        run: |
+          python3 blenderbridge-ci/integrate.py upstream
+          git -C upstream diff --check
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+          rustup target add aarch64-linux-android x86_64-linux-android
+      - name: Generate and check contract
+        working-directory: upstream/rust
+        run: |
+          cargo run --locked -p contract --bin generate_contract
+          cargo run --locked -p contract --bin generate_contract -- --check
+          cargo check --locked --workspace
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Android SDK and NDK
+        run: |
+          sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;29.0.14206865"
+          cargo install cargo-ndk --locked
+      - name: Build debug APK (separate package)
+        working-directory: upstream
+        run: |
+          chmod +x gradlew
+          ./gradlew :standalone:assembleDebug --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blenderbridge-native-debug-apk
+          path: upstream/standalone/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
