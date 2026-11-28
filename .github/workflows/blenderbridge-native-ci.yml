@@ -47,8 +47,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: android-actions/setup-android@v3
       - name: Android SDK and NDK
         run: |
+          command -v sdkmanager
+          sdkmanager --version
           sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;29.0.14206865"
           cargo install cargo-ndk --locked
       - name: Build debug APK (separate package)
