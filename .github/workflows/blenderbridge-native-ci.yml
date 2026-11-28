@@ -55,7 +55,9 @@ jobs:
         run: |
           command -v sdkmanager
           sdkmanager --version
-          sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;29.0.14206865"
+          sdkmanager --list --channel=3 > "$RUNNER_TEMP/android-sdk-packages.txt"
+          grep -E "platforms;android-(3[6-9]|[A-Za-z])|ndk;29|build-tools;36" "$RUNNER_TEMP/android-sdk-packages.txt" || true
+          sdkmanager --channel=3 "platforms;android-37" "build-tools;36.0.0" "ndk;29.0.14206865"
           cargo install cargo-ndk --locked
       - name: Build debug APK (separate package)
         working-directory: upstream
