@@ -23,14 +23,27 @@ jobs:
           test -f project/21_build_render.py
           python patches/fix_blender5_glare.py project/21_build_render.py
           python patches/p22_contrast_candidate.py project/21_build_render.py
+      - name: Cache verified Blender release
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-5.0.1-linux-x64
+          key: blender-official-5.0.1-linux-x64-v1
       - name: Install Blender
+        shell: bash
         run: |
+          set -euo pipefail
           cd "$RUNNER_TEMP"
-          curl -fL --retry 3 https://download.blender.org/release/Blender5.0/blender-5.0.1-linux-x64.tar.xz -o blender-5.0.1-linux-x64.tar.xz
-          curl -fL --retry 3 https://download.blender.org/release/Blender5.0/blender-5.0.1.sha256 -o checksums
-          grep -F blender-5.0.1-linux-x64.tar.xz checksums > blender.sha256
-          sha256sum -c blender.sha256
-          tar -xf blender-5.0.1-linux-x64.tar.xz
+          if [[ ! -x blender-5.0.1-linux-x64/blender ]]; then
+            archive=blender-5.0.1-linux-x64.tar.xz
+            base=https://download.blender.org/release/Blender5.0
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "$base/blender-5.0.1.sha256" -o checksums
+            grep -F "$archive" checksums > blender.sha256
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "$base/$archive" -o "$archive" || curl -fL --retry 3 --retry-all-errors --connect-timeout 30 "https://ftp.halifax.rwth-aachen.de/blender/release/Blender5.0/$archive" -o "$archive"
+            sha256sum -c blender.sha256
+            tar -xf "$archive"
+          fi
+          ./blender-5.0.1-linux-x64/blender --version | tee "$GITHUB_WORKSPACE/logs/install.txt"
           echo "$RUNNER_TEMP/blender-5.0.1-linux-x64" >> "$GITHUB_PATH"
       - name: Render frame 150 with Cycles
         shell: bash
