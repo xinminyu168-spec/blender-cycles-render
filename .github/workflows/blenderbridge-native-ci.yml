@@ -5,6 +5,11 @@ on:
     paths:
       - 'blenderbridge-ci/**'
       - '.github/workflows/blenderbridge-native-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'blenderbridge-ci/**'
+      - '.github/workflows/blenderbridge-native-ci.yml'
   workflow_dispatch:
 permissions:
   contents: read
