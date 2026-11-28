@@ -95,6 +95,54 @@ jobs:
             url="https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/$artifact/2.4.10/$artifact-2.4.10.pom"
             curl --location --retry 2 --connect-timeout 15 --max-time 60 --silent --show-error --output /dev/null --write-out "$artifact HTTP %{http_code}\n" "$url" || true
           done
+      - name: Add narrowly scoped Maven metadata verification
+        working-directory: upstream
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.request import urlopen
+          import hashlib
+          import re
+          import xml.etree.ElementTree as ET
+          p = Path("gradle/verification-metadata.xml")
+          ns = "https://schema.gradle.org/dependency-verification"
+          tree = ET.parse(p)
+          components = tree.getroot().find("{"+ns+"}components")
+          text = p.read_text()
+          for group, name, version, filename in [
+              ("com.google.guava", "guava-parent", "33.4.0-jre", "guava-parent-33.4.0-jre.pom"),
+              ("org.junit", "junit-bom", "5.10.2", "junit-bom-5.10.2.module"),
+              ("org.junit", "junit-bom", "5.11.0-M2", "junit-bom-5.11.0-M2.module"),
+          ]:
+              url = "https://repo.maven.apache.org/maven2/"+group.replace(".","/")+"/"+name+"/"+version+"/"+filename
+              with urlopen(url, timeout=30) as r:
+                  data = r.read(1048577)
+              assert len(data) <= 1048576
+              digest = hashlib.sha256(data).hexdigest()
+              # Verify against the publisher repository's separate checksum.
+              with urlopen(url+".sha256", timeout=30) as r:
+                  expected = r.read(1024).decode("ascii").strip().split()[0].lower()
+              assert re.fullmatch("[0-9a-f]{64}",expected) and digest == expected, filename
+              attrs = {"group":group,"name":name,"version":version}
+              matches = [c for c in components if c.attrib == attrs]
+              assert len(matches)<=1
+              existing = [] if not matches else [a for a in matches[0] if a.attrib.get("name")==filename]
+              if existing:
+                  assert len(existing)==1
+                  assert digest in [h.attrib.get("value") for h in existing[0] if h.tag=="{"+ns+"}sha256"], "Existing pin mismatch: "+filename
+                  continue
+              block = '         <artifact name="'+filename+'">\n            <sha256 value="'+digest+'" origin="Maven Central SHA-256 metadata"/>\n         </artifact>\n'
+              tag = '      <component group="'+group+'" name="'+name+'" version="'+version+'">\n'
+              if matches:
+                  assert text.count(tag)==1
+                  text=text.replace(tag,tag+block,1)
+              else:
+                  assert text.count("   </components>")==1
+                  text=text.replace("   </components>",tag+block+"      </component>\n   </components>",1)
+              print("Added metadata pin:",filename,digest)
+          ET.fromstring(text)
+          p.write_text(text)
+          PY
       - name: Build debug APK (separate package)
         working-directory: upstream
         run: |
